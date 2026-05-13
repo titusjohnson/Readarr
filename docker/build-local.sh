@@ -12,12 +12,16 @@ cd "$REPO_ROOT"
 RID="${RID:-linux-x64}"
 TAG="${TAG:-readarr:local}"
 
-echo "==> Building backend (RID=$RID, self-contained)"
+echo "==> Building backend (RID=$RID, framework-dependent)"
+# Framework-dependent publish: relies on aspnetcore-runtime-6.0 being present in the
+# runtime image. Self-contained publish currently breaks for this codebase due to an
+# assembly-version conflict on Microsoft.Extensions.DependencyInjection.Abstractions
+# (the .NET 6 runtime pack overwrites the NuGet 7.0.0 version with the framework 6.0.0).
 dotnet msbuild -restore src/Readarr.sln \
     -p:Configuration=Release \
     -p:Platform=Posix \
     -p:RuntimeIdentifiers="$RID" \
-    -p:SelfContained=true \
+    -p:SelfContained=false \
     -t:PublishAllRids \
     -nologo -v:minimal
 

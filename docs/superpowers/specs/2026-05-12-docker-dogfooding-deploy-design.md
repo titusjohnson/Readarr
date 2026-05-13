@@ -1,7 +1,7 @@
 # Docker Dogfooding Deploy — Design
 
 **Date:** 2026-05-12
-**Status:** Approved (brainstorming complete; ready for implementation plan)
+**Status:** Approved — amended 2026-05-12 during Task 2 smoke test (see "Amendments" below)
 
 ## Goal
 
@@ -169,5 +169,32 @@ The workflow may succeed (push the image) even if:
 
 ## Open assumptions to confirm with user during review
 
-- The user's existing compose stack is in a single `docker-compose.yml` they'd append to (rather than per-service compose files). If it's split, the docs need adjusting.
-- The user is OK creating a PAT scoped to `read:packages` for the server. If not, we'd need an alternative auth mechanism.
+- The user's existing compose stack is in a single `docker-compose.yml` they'd append to (rather than per-service compose files). If it's split, the docs need adjusting. **Confirmed during brainstorming review.**
+- The user is OK creating a PAT scoped to `read:packages` for the server. If not, we'd need an alternative auth mechanism. **Confirmed during brainstorming review (server already authed).**
+
+## Amendments (post-approval)
+
+### A1 — 2026-05-12 — Switch from self-contained to framework-dependent publish
+
+**Surfaced by:** Task 2 smoke test failure.
+
+**What changed:** The original design chose `SelfContained=true` for the .NET publish to avoid needing a runtime install in the image. In practice, self-contained publish has a known bug for this codebase: the .NET 6 runtime pack overwrites NuGet's `Microsoft.Extensions.DependencyInjection.Abstractions` 7.0.0 with the framework's 6.0.0 version during publish, causing assembly-version mismatches at startup. Readarr crashes with `System.IO.FileLoadException: ... Version=7.0.0.0 ... manifest definition does not match`.
+
+**New approach:** Use framework-dependent publish (`SelfContained=false`) and install the ASP.NET Core 6 runtime inside the image. This is the configuration used by upstream Readarr, linuxserver/io, and hotio — proven to work.
+
+**Implication:** The original design's risk row about ".NET 6 EOL — runtime install fails" came true. Microsoft has removed `aspnetcore-runtime-6.0` from the Debian 12 apt repo. The mitigation: install via `dotnet-install.sh` from `https://dot.net/v1/dotnet-install.sh`, which fetches binaries from `builds.dotnet.microsoft.com` — Microsoft's documented path for EOL versions. Binaries remain hosted there indefinitely.
+
+**Affects:**
+- `docker/Dockerfile` — adds the dotnet-install.sh runtime install step
+- `docker/build-local.sh` — `-p:SelfContained=false` (not `=true`)
+- `.github/workflows/docker.yml` (Task 3) — same flag change
+
+### A2 — 2026-05-12 — Add libicu72 to runtime image
+
+**Surfaced by:** Task 2 smoke test failure.
+
+**What changed:** Debian-bookworm base ships without `libicu`. .NET 6 requires it for globalization. Readarr ships translations (Weblate-managed), so invariant-mode is not an acceptable workaround.
+
+**New approach:** Install `libicu72` via apt in the Dockerfile.
+
+**Affects:** `docker/Dockerfile` only.
