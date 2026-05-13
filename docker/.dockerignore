@@ -1,0 +1,7 @@
+# Only the staged context/ and root/ should ship into the image
+*
+!Dockerfile
+!root/
+!root/**
+!context/
+!context/**

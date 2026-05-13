@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+mkdir -p /config
+chown -R abc:abc /config
