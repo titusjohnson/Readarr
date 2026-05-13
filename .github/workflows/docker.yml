@@ -1,0 +1,122 @@
+name: Build and push dogfooding image
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/readarr
+
+jobs:
+  build:
+    name: Build, smoke-test, push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 6 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 6.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'src/Directory.Packages.props') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.11.1
+          cache: yarn
+
+      - name: Build backend (linux-x64, framework-dependent)
+        run: |
+          dotnet msbuild -restore src/Readarr.sln \
+              -p:Configuration=Release \
+              -p:Platform=Posix \
+              -p:RuntimeIdentifiers=linux-x64 \
+              -p:SelfContained=false \
+              -t:PublishAllRids \
+              -nologo -v:minimal
+
+      - name: Build frontend
+        run: |
+          yarn install --frozen-lockfile --network-timeout 600000
+          yarn run build --env production
+
+      - name: Stage Docker context
+        run: |
+          rm -rf docker/context
+          mkdir -p docker/context
+          cp -R _output/net6.0/linux-x64/publish docker/context/publish
+          cp -R _output/UI docker/context/UI
+
+      - name: Set short SHA
+        id: sha
+        run: echo "short=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image (load for smoke test)
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          load: true
+          tags: readarr:ci
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      - name: Smoke test (boot + /ping returns 200)
+        run: |
+          set -euo pipefail
+          docker run -d --name readarr-smoke \
+              -p 18787:8787 \
+              -e PUID=1000 -e PGID=1000 -e TZ=UTC \
+              readarr:ci
+          ok=0
+          for i in $(seq 1 60); do
+              if curl -fs http://localhost:18787/ping >/dev/null 2>&1; then
+                  echo "OK after ${i}s"
+                  ok=1
+                  break
+              fi
+              sleep 1
+          done
+          docker logs readarr-smoke || true
+          docker stop readarr-smoke || true
+          docker rm readarr-smoke || true
+          if [ "$ok" -ne 1 ]; then
+              echo "::error::Smoke test failed: /ping did not return 200 within 60s"
+              exit 1
+          fi
+
+      - name: Push image
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:develop
+            ${{ env.IMAGE_NAME }}:sha-${{ steps.sha.outputs.short }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
