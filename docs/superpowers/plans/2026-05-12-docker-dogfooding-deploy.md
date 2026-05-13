@@ -4,7 +4,9 @@
 
 **Goal:** Build a `git push → GHCR image → server pull` loop so the fork owner can dogfood Readarr on a personal home server alongside Sonarr/Radarr.
 
-**Architecture:** Self-contained .NET 6 publish built on the GH Actions runner, packaged into a linuxserver.io-base Docker image, pushed to private GHCR on every push to `develop` (tagged `:develop` rolling + `:sha-<short>` immutable). Server pulls and runs via the existing `docker-compose.yml`.
+**Architecture:** Framework-dependent .NET 6 publish built on the GH Actions runner, packaged into a linuxserver.io-base Docker image (with ASP.NET Core 6 runtime + libicu72 installed at image-build time), pushed to private GHCR on every push to `develop` (tagged `:develop` rolling + `:sha-<short>` immutable). Server pulls and runs via the existing `docker-compose.yml`.
+
+> **Plan amendment (2026-05-12):** The original design used self-contained publish to avoid runtime install. Task 2 smoke test surfaced an assembly-version conflict — the .NET 6 runtime pack overwrites the NuGet 7.0.0 version of `Microsoft.Extensions.DependencyInjection.Abstractions`, causing startup `FileLoadException`. Switched to framework-dependent. Microsoft has removed `aspnetcore-runtime-6.0` from the Debian-12 apt repo (the EOL risk in the spec came true), so the runtime is installed via `dotnet-install.sh` from `dot.net/v1/dotnet-install.sh`. See spec amendments A1 and A2.
 
 **Tech Stack:** .NET 6 SDK, Node 20 + yarn 1, Docker Buildx, s6-overlay v3, `lscr.io/linuxserver/baseimage-debian:bookworm`, GitHub Actions.
 
@@ -70,7 +72,36 @@ LABEL org.opencontainers.image.source="https://github.com/titusjohnson/Readarr"
 LABEL org.opencontainers.image.description="Readarr (revival fork) — dogfooding image"
 LABEL org.opencontainers.image.licenses="GPL-3.0"
 
-# Self-contained .NET 6 publish output, built on the runner (or via build-local.sh).
+# Runtime dependencies.
+#
+# Self-contained publish has a known bug for this codebase: the .NET 6 runtime pack
+# overwrites NuGet's Microsoft.Extensions.DependencyInjection.Abstractions 7.0.0 with
+# the framework's 6.0.0 version during publish, causing assembly-version mismatches
+# at startup. We use framework-dependent publish and ship the ASP.NET Core 6 runtime
+# inside the image.
+#
+# .NET 6 is EOL (Nov 2024); Microsoft has removed it from their Debian apt repo but
+# the binaries remain available on builds.dotnet.microsoft.com. We install via the
+# dotnet-install.sh script, which is Microsoft's documented path for EOL versions.
+#
+# libicu72 satisfies .NET 6's globalization requirement (Readarr ships translations,
+# so invariant mode is not an option).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates libicu72 && \
+    rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh && \
+    chmod +x /tmp/dotnet-install.sh && \
+    /tmp/dotnet-install.sh \
+        --runtime aspnetcore \
+        --channel 6.0 \
+        --install-dir /usr/share/dotnet \
+        --no-path && \
+    ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet && \
+    rm /tmp/dotnet-install.sh
+
+ENV DOTNET_ROOT=/usr/share/dotnet
+
+# Framework-dependent .NET 6 publish output, built on the runner (or via build-local.sh).
 # Layout in build context: docker/context/publish/ for the backend, docker/context/UI/ for the frontend.
 COPY context/publish/ /app/readarr/bin/
 COPY context/UI/ /app/readarr/bin/UI/
@@ -150,12 +181,16 @@ cd "$REPO_ROOT"
 RID="${RID:-linux-x64}"
 TAG="${TAG:-readarr:local}"
 
-echo "==> Building backend (RID=$RID, self-contained)"
+echo "==> Building backend (RID=$RID, framework-dependent)"
+# Framework-dependent publish: relies on aspnetcore-runtime-6.0 being present in the
+# runtime image. Self-contained publish currently breaks for this codebase due to an
+# assembly-version conflict on Microsoft.Extensions.DependencyInjection.Abstractions
+# (the .NET 6 runtime pack overwrites the NuGet 7.0.0 version with the framework 6.0.0).
 dotnet msbuild -restore src/Readarr.sln \
     -p:Configuration=Release \
     -p:Platform=Posix \
     -p:RuntimeIdentifiers="$RID" \
-    -p:SelfContained=true \
+    -p:SelfContained=false \
     -t:PublishAllRids \
     -nologo -v:minimal
 
@@ -362,13 +397,13 @@ jobs:
           node-version: 20.11.1
           cache: yarn
 
-      - name: Build backend (linux-x64, self-contained)
+      - name: Build backend (linux-x64, framework-dependent)
         run: |
           dotnet msbuild -restore src/Readarr.sln \
               -p:Configuration=Release \
               -p:Platform=Posix \
               -p:RuntimeIdentifiers=linux-x64 \
-              -p:SelfContained=true \
+              -p:SelfContained=false \
               -t:PublishAllRids \
               -nologo -v:minimal
 
@@ -734,7 +769,7 @@ docker compose pull readarr && docker compose up -d readarr
 | GHCR private registry | Task 3 step 2 (no public flag), Task 5 (login required) |
 | `:develop` and `:sha-<short>` tags | Task 3 step 2 (push step tags) |
 | linuxserver.io base image | Task 1 step 3 (Dockerfile FROM) |
-| Self-contained .NET 6 publish | Task 1 step 3 (no runtime install), Task 3 step 2 (build flags) |
+| Framework-dependent .NET 6 publish + ASP.NET 6 runtime in image | Task 1 step 3 (Dockerfile installs runtime via dotnet-install.sh + libicu72), Task 3 step 2 (build flag `SelfContained=false`) — see spec amendments A1/A2 |
 | s6-overlay service supervision | Task 1 steps 4–9 |
 | `/config`, `/books`, `/downloads` volumes | Task 1 step 3 (Dockerfile VOLUME) |
 | `PUID`/`PGID` env support | Task 1 step 5 (run script uses abc), Task 2 step 3, Task 5 docs |
