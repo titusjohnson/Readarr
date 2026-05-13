@@ -35,6 +35,7 @@
 - Create: `docker/root/etc/s6-overlay/s6-rc.d/svc-readarr/type`
 - Create: `docker/root/etc/s6-overlay/s6-rc.d/svc-readarr/run`
 - Create: `docker/root/etc/s6-overlay/s6-rc.d/svc-readarr/dependencies.d/init-readarr-config` (empty)
+- Create: `docker/root/etc/s6-overlay/s6-rc.d/init-readarr-config/dependencies.d/init-adduser` (empty — ensures the LSIO base's PUID/PGID remapping runs before our chown)
 - Create: `docker/root/etc/s6-overlay/s6-rc.d/user/contents.d/init-readarr-config` (empty)
 - Create: `docker/root/etc/s6-overlay/s6-rc.d/user/contents.d/svc-readarr` (empty)
 

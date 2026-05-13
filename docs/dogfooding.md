@@ -47,15 +47,18 @@ Visit `http://<server-ip>:8787/` to confirm the UI loads.
 
 ## Update workflow
 
-After you push a change to `develop` and the workflow finishes (you can confirm at `https://github.com/titusjohnson/Readarr/actions`):
+After you push a change to `develop` and the workflow finishes (you can confirm at `https://github.com/titusjohnson/Readarr/actions`), pick one of:
+
+**Option A — rolling update (default).** Pull whatever `:develop` currently points at:
 
 ```bash
-# Pull the rolling :develop tag
 docker compose pull readarr
 docker compose up -d readarr
+```
 
-# Or pin to a specific commit's image for stability:
-# Edit docker-compose.yml, change the image tag to ghcr.io/titusjohnson/readarr:sha-abc1234
+**Option B — pin to a specific SHA for stability.** Find the tag you want via the GHCR query in the Rollback section, edit `docker-compose.yml` so the `image:` line is `ghcr.io/titusjohnson/readarr:sha-abc1234`, then:
+
+```bash
 docker compose pull readarr
 docker compose up -d readarr
 ```
@@ -68,7 +71,7 @@ To find previous tags:
 
 ```bash
 gh api "/users/titusjohnson/packages/container/readarr/versions" \
-    --jq '.[] | .metadata.container.tags' | head -20
+    --jq '.[0:10] | .[] | {id, created_at, tags: .metadata.container.tags}'
 ```
 
 ## Logs and troubleshooting
@@ -82,7 +85,7 @@ docker exec readarr tail -f /config/logs/readarr.txt
 
 # Confirm /ping responds
 curl http://<server-ip>:8787/ping
-# Expected: 200 with empty body
+# Expected: 200, body: {"status":"OK"}
 ```
 
 ### "Image not found" on pull
@@ -91,7 +94,7 @@ Re-authenticate to GHCR (`docker login ghcr.io ...`). The image is private; an u
 
 ### Permissions issue on `/config`
 
-Check `docker exec readarr ls -la /config`. Everything should be owned by `abc abc`. If not, stop the container, `chown -R <PUID>:<PGID>` the host-mount path, and restart.
+Inside the container the `/config` directory and files Readarr creates should be owned by your `PUID`/`PGID` (displayed as `abc abc` once the LSIO init has remapped the runtime user). If `docker logs readarr` shows `Permission denied` errors, the host-mount path isn't writable by `PUID`. Stop the container, run `sudo chown -R <PUID>:<PGID> ./readarr-config` (or whatever you mounted), and `docker compose up -d readarr`.
 
 ### First-run takes forever
 
