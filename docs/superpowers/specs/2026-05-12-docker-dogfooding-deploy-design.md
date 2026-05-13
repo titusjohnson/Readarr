@@ -165,6 +165,15 @@ The workflow may succeed (push the image) even if:
 - Add automated server-side deploy (SSH from CI, or a webhook the server polls).
 - Flip the GHCR package to public.
 - Modernize to .NET 8 (and revisit the Dockerfile then — Microsoft's apt repo serves .NET 8 cleanly).
+
+### Deferred from final code review (2026-05-13)
+
+After end-to-end success on the home server, the final cross-cutting review flagged these — accepted as known follow-ups rather than blockers:
+
+- **Spec body is stale.** Sections at lines ~62, 66, 89, 146, 155 still describe the self-contained publish approach; amendments A1/A2 invert those decisions but the body wasn't rewritten. A future reader reading top-to-bottom hits the inverted claims first. Fix: rewrite the body to match A1/A2, or mark stale claims inline as `(superseded by A1)`.
+- **`global.json` policy is undocumented.** Commit `0b40bd327c` pinned the SDK to `6.0.x` to silence NuGetAudit-as-error on MailKit 4.8.0 and SixLabors.ImageSharp 3.1.7 vuln advisories. The commit message has the rationale but it should be made durable: ideally an `A3` amendment to this spec, or at minimum a comment in `global.json` recording the "we silence via SDK choice, deps still need updating eventually" policy.
+- **CI smoke test has no `/config` volume mount.** The init-adduser dependency fix landed in `dfcbdc7f73` won't regression-test in CI because the smoke step uses an anonymous volume. The first end-to-end test was the user's home server. Fix: add `-v $(pwd)/.ci-config:/config` to the smoke-test step in `.github/workflows/docker.yml`.
+- **`dotnet-install.sh` chain is a new fragility surface.** A1 introduced a runtime install path through `dot.net/v1/dotnet-install.sh` and `builds.dotnet.microsoft.com`. Both are operated by Microsoft and could change unilaterally. Mitigation when it bites: vendor the install script and/or cache the downloaded runtime tarball in a layer the buildx registry cache can serve. Worth a row in the Risks table.
 - Multi-stage Dockerfile that builds inside the image (only worth it if we want reproducible local builds without local toolchain).
 
 ## Open assumptions to confirm with user during review
